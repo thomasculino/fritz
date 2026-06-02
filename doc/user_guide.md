@@ -13,9 +13,9 @@ It implements an end-to-end, scalable, API-first system for Time-domain Astronom
 
 The key characteristics of Fritz are efficiency, scalability, portability, and extensibility.
 Fritz employs a modular architecture and
-integrates and extends two major components: [Kowalski](https://github.com/dmitryduev/kowalski)
-acts as the alert processor and data archive, and [SkyPortal](https://github.com/skyportal/skyportal),
-which handles the rest of the stack.
+integrates and extends two major components: [BOOM](https://github.com/boom-astro/boom)
+acts as the alert broker and data archive, providing survey-agnostic access to ZTF, LSST, and other surveys,
+and [SkyPortal](https://github.com/skyportal/skyportal), which handles the rest of the stack.
 The schematic overview of our system is shown below:
 
 ![img/fritz.png](img/fritz.jpg)
@@ -58,8 +58,8 @@ the group, and the group's [alert filters](https://docs.fritz.science/user_guide
 on the Group page. Group admins can create new filters (and modify existing ones).
 System administrators can grant alert stream access to the groups.
 
-`Fritz` provides rich alert stream filtering capabilities through its Kowalski backend,
-which consumes the ZTF Kafka alert stream, persisting the alerts to a database,
+`Fritz` provides rich alert stream filtering capabilities through its `BOOM` backend,
+which ingests alert streams, persisting the alerts to a database,
 and supplementing them with additional data such as the Galactic coordinates,
 external catalog cross-matches, machine learning scores etc.
 
@@ -86,7 +86,7 @@ Finally, we provide public alert databases for filter design and debugging.
 Alerts passing a filter are posted to Fritz's SkyPortal backend as Candidates
 and appear on the Scanning page (for the corresponding filter groups).
 
-Candidates do not have to originate from `Kowalski` and could be posted (manually) via the API.
+Candidates do not have to originate from `BOOM` and could be posted (manually) via the API.
 
 On the Candidates page, the users can filter, scan and inspect the objects that have passed filters of their groups
 and save them to one or more groups. Candidates that are not saved to any group within 7 days are removed from `Fritz`.
@@ -145,12 +145,12 @@ Users can query the objects that exist in Fritz's SkyPortal on the Sources page:
 ![lsst-ws-sources](https://user-images.githubusercontent.com/7557205/113937545-2bceaa00-97ae-11eb-9e66-1fe19aa79a62.gif)
 
 Only the objects that have been posted to `Fritz`'s `SkyPortal` backend are saved in its database.
-However, `Fritz`'s users can access the entire archive of ZTF alerts (~390M as of June 2021) via the Alerts page:
+However, `Fritz`'s users can access the entire archive of ZTF & LSST alerts via the Alerts page, powered by the `BOOM` API:
 
 ![alerts-20210601](https://user-images.githubusercontent.com/7557205/120433501-287c1880-c330-11eb-907f-9c5327b9e0aa.gif)
 
-`Fritz`'s users also have access to the entire archive of photometric light curves of ZTF sources
-(~4B as of June 2021) via the Archive page:
+`Fritz`'s users also have access to the entire archive of photometric light curves and catalog
+cross-matches via the Archive page, also powered by `BOOM`:
 
 ![archive-20210601](https://user-images.githubusercontent.com/7557205/120433545-36319e00-c330-11eb-9399-e68146a05d8b.gif)
 
@@ -167,7 +167,7 @@ Fritz's interfaces are mobile-friendly, so the app will work as expected on your
 
 ### Using the API
 
-An API enables access to most of the underlying functionality of Fritz/SkyPortal/Kowalski.
+An API enables access to most of the underlying functionality of Fritz/SkyPortal/BOOM.
 The workflows described above are all enabled by specific API calls.
 The complete OpenAPI specification is available at [https://docs.fritz.science/api.html](https://docs.fritz.science/api.html).
 
@@ -238,22 +238,24 @@ This section describes how to define alert stream filters within `Fritz` and pro
 
 ### Introduction
 
-[ZTF alerts](https://github.com/ZwickyTransientFacility/ztf-avro-alert) are
-[generated at IPAC](https://iopscience.iop.org/article/10.1088/1538-3873/aae8ac/meta) based on difference
-imaging analysis and are distributed to the world at low latency via a Kafka alert stream.
-`Fritz`'s `Kowalski` backend consumes this stream, persisting the alerts to a `MongoDB` database,
+`Fritz`'s `BOOM` backend ingests alert streams (e.g.
+[ZTF](https://github.com/ZwickyTransientFacility/ztf-avro-alert) & [LSST](https://github.com/lsst/alert_packet) alerts distributed via Kafka),
+persisting them to a `MongoDB` database
 and supplementing them with other useful quantities such as Galactic coordinates, external catalog cross-matches,
-machine learning scores etc. Next, `Kowalski` executes a series of user-defined filters on each new ("enhanced")
-incoming alert accessible to the filter. Users create filters on the `SkyPortal` frontend and they are executed
-on the `Kowalski` backend. If an alert passes a filter, it is pushed up to `SkyPortal` and appears on a program's
-scanning page.
+and machine learning scores. Next, user-defined filters are executed on each new ("enhanced")
+incoming alert via the `BOOM` API. Users create filters on the `Fritz` frontend and they are
+stored and executed by `BOOM`. If an alert passes a filter, it is pushed up to `Fritz` and
+appears on a program's scanning page.
+
+`BOOM` supports multiple surveys (ZTF, LSST). While the filter examples below use ZTF field names,
+the same aggregation pipeline approach applies to all supported surveys with their respective field names.
 
 Note: for a detailed description of the ZTF alerts and their contents, please see
-[here](https://github.com/ZwickyTransientFacility/ztf-avro-alert).
+[here](https://github.com/ZwickyTransientFacility/ztf-avro-alert) (for LSST, see [here](https://github.com/lsst/alert_packet)).
 
 #### Implementation of Filters as MongoDB Aggregation Pipelines
 
-`Kowalski` uses [`MongoDB`](https://mongodb.com), a document-based NoSQL database, on the backend.
+`BOOM` uses [`MongoDB`](https://mongodb.com), a document-based NoSQL database, on the backend.
 
 - For a very brief introduction into `MongoDB`, we recommend watching
   [MongoDB in 5 Minutes with Eliot Horowitz](https://www.youtube.com/watch?v=EE8ZTQxa0AM).
@@ -357,16 +359,15 @@ JSON.
 
 [OPTIONAL READ]
 
-The upstream "massaging" mentioned above is performed by `Fritz` for each alert and includes:
+The upstream "massaging" mentioned above is performed by `BOOM` for each alert and includes:
 
-- Selecting the newly ingested alert from the `ZTF_alerts` collection by its `candid`
-- Removing the image cutouts to reduce traffic
-- Joining the alert by its `objectId` with the corresponding entry in the `ZTF_alerts_aux` collection, which contains
+- Selecting the newly ingested alert from the alerts (`survey`_alerts) collection by its `candid`
+- Joining the alert by its `objectId` with the corresponding entry in the auxiliary (`survey`_alerts_aux) collection, which contains
   the cross-matches, ML scores, computed quantities, and archival photometry / detection history
 
 The upstream stages also take care of the ACLs.
 
-`Fritz` uses the following four stages:
+`BOOM` uses the following four stages:
 
 - The first [`$match`](https://docs.mongodb.com/manual/reference/operator/aggregation/match/)
   stage selects the alert by its candid and ensures the ACLs are respected.
@@ -467,7 +468,7 @@ The user-defined filter stages then operate on the "enhanced" packets that look 
 
 ![img/filter-04.png](img/filter-04.png)
 
-`Fritz` automatically prepends these stages to all user-defined filters. However, when constructing/debugging
+`BOOM` automatically prepends these stages to all user-defined filters. However, when constructing/debugging
 filters in Compass, the users must take care of that -- all the examples below come with the upstream stages prepended.
 
 #### Limitations
@@ -476,25 +477,21 @@ filters in Compass, the users must take care of that -- all the examples below c
 
 #### Alert data augmentation
 
-Fritz's Kowalski backend augments the alert data with the following: [as of January 2021]
+Fritz's `BOOM` backend augments the alert data with the following: [as of January 2021]
 
 - Galactic coordinates
 
 - Cross-matches with external catalogs:
   - 2MASS_PSC (all matches within 2")
-  - AllWISE (all matches within 2")
+  - CatWISE2020 (all matches within 2")
   - GALEX (all matches within 2")
-  - Gaia_DR2 (all matches within 2")
-  - Gaia_EDR3 (all matches within 2")
-  - Gaia_DR2_WD (all matches within 2")
-  - IPHAS_DR2 (all matches within 2")
-  - LAMOST_DR5_v3 (all matches within 2")
+  - Gaia_DR3 (all matches within 2")
   - PS1_DR1 (all matches within 2")
-  - PS1_STRM (all matches within 2")
-  - galaxy_redshifts_20200522 (all matches within 2")
-  - CLU_20190625 (["elliptical" matches with close galaxies using 3x their size](https://github.com/dmitryduev/kowalski/blob/master/kowalski/alert_broker_ztf.py#L351))
-
-For the detailed description of the available catalogs, see [here](catalogs.html)
+  - LSPSC (all matches within 2")
+  - NED (all matches within 2")
+  - TNS (all matches within 2")
+  - VSX (all matches within 2")
+  - miliquas_v8 (all matches within 2")
 
 - Machine learning scores:
   - [`braai`](https://academic.oup.com/mnras/article/489/3/3582/5554758) version `d6_m9` -- real/bogus classifier
@@ -2478,7 +2475,7 @@ Any alert from an object within 2 arcseconds from these positions will pass this
 #### `prv_candidates` array sorting
 
 The `prv_candidates` are stored as a set and are thus not sorted. To do that, you may use the following stages
-immediately after the default `Fritz`'s upstream stages:
+immediately after the default `BOOM`'s upstream stages:
 
 ```js
 [
